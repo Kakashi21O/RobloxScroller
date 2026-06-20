@@ -253,7 +253,6 @@ class InputHandler:
 
         self._mouse_listener: Optional[mouse.Listener] = None
         self._kb_listener: Optional[keyboard.Listener] = None
-        self.paused = False
 
     
     # Mouse callbacks
@@ -294,12 +293,8 @@ class InputHandler:
                                    "queued" if accepted else "dropped")
 
         elif key == Key.esc:
-            self.paused = not self.paused
-
-            if self.paused:
-                self._logger.info("PAUSED")
-            else:
-                self._logger.info("RESUMED")
+            self._logger.info("Esc pressed – shutting down.")
+            self._stop_callback()
 
     
     # Lifecycle

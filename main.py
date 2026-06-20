@@ -196,8 +196,8 @@ class SlotController:
                         new_slot: Optional[str]) -> None:
         if not self._cfg.enable_logging:
             return
-        dir_label = "Scroll Up (→)" if direction is Direction.RIGHT \
-                    else "Scroll Down (←)"
+        dir_label = "Scroll Up (←)" if direction is Direction.LEFT \
+                    else "Scroll Down (→)"
         if new_slot is None:
             self._logger.info(
                 "Current Slot: %s | Input: %s | Action: No Action (boundary)",
@@ -253,6 +253,7 @@ class InputHandler:
 
         self._mouse_listener: Optional[mouse.Listener] = None
         self._kb_listener: Optional[keyboard.Listener] = None
+        self.paused = False
 
     
     # Mouse callbacks
@@ -262,7 +263,7 @@ class InputHandler:
         if dy == 0:
             return
 
-        direction = Direction.RIGHT if dy > 0 else Direction.LEFT
+        direction = Direction.LEFT if dy > 0 else Direction.RIGHT
         accepted = self._queue.put(direction)
 
         if self._logger.isEnabledFor(logging.DEBUG):
@@ -293,8 +294,12 @@ class InputHandler:
                                    "queued" if accepted else "dropped")
 
         elif key == Key.esc:
-            self._logger.info("Esc pressed – shutting down.")
-            self._stop_callback()
+            self.paused = not self.paused
+
+            if self.paused:
+                self._logger.info("PAUSED")
+            else:
+                self._logger.info("RESUMED")
 
     
     # Lifecycle
@@ -341,8 +346,8 @@ def main() -> None:
     logger.info("=" * 60)
     logger.info("Inventory Slot Controller")
     logger.info("Slots : 1 2 3 4 5 6 7 8 9 0")
-    logger.info("Scroll Up / E  →  move right")
-    logger.info("Scroll Down / Q →  move left")
+    logger.info("Scroll Down / E  →  move right")
+    logger.info("Scroll Up / Q →  move left")
     logger.info("Press Esc to exit.")
     logger.info("=" * 60)
     logger.info("Sensitivity : %s  (delay %d ms)",

@@ -1,23 +1,3 @@
-"""
-Inventory Slot Controller
-=========================
-A lightweight, event-driven inventory hotbar controller for gaming.
-
-Slots  : 1, 2, 3, 4, 5, 6, 7, 8, 9, 0  (0 is the rightmost/last slot)
-Navigation order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 0
-                  0 → 9 → 8 → 7 → 6 → 5 → 4 → 3 → 2 → 1
-
-Controls:
-  Mouse Wheel Up  / E  →  move one slot right
-  Mouse Wheel Down / Q →  move one slot left
-
-Architecture:
-  InputHandler  – captures mouse wheel and keyboard events (pynput)
-  SlotQueue     – thread-safe FIFO queue for direction tokens
-  SlotController– state machine that processes the queue and emits keypresses
-  main()        – wires everything together and runs the event loop
-"""
-
 from __future__ import annotations
 
 import logging
@@ -47,7 +27,6 @@ except ImportError:
 
 # CONFIGURATION
 
-
 class Sensitivity(Enum):
     VERY_SLOW = "very_slow"
     SLOW      = "slow"
@@ -71,7 +50,7 @@ class Config:
 
     sensitivity: Sensitivity = Sensitivity.NORMAL
     transition_delay_ms: float = 0      # 0 means "use sensitivity preset"
-    enable_logging: bool = True
+    enable_logging: bool = False
     debug_mode: bool = False
 
     # Delay presets (milliseconds)
@@ -83,7 +62,6 @@ class Config:
     }, repr=False)
 
     def effective_delay_seconds(self) -> float:
-        """Return the transition delay in seconds."""
         ms = self.transition_delay_ms if self.transition_delay_ms > 0 \
              else self._PRESET_DELAYS[self.sensitivity]
         return ms / 1_000.0
@@ -93,7 +71,7 @@ class Config:
 # SLOT MODEL
 
 
-# Logical ordering of slots (index position = left-to-right order).
+# Logical ordering of slots
 SLOT_ORDER: tuple[str, ...] = ("1", "2", "3", "4", "5", "6", "7", "8", "9", "0")
 SLOT_INDEX: dict[str, int] = {s: i for i, s in enumerate(SLOT_ORDER)}
 
@@ -118,19 +96,10 @@ def _setup_logging(debug: bool) -> logging.Logger:
 
 
 
-# SLOT QUEUE  (thread-safe)
+# SLOT QUEUE 
 
 
 class SlotQueue:
-    """
-    Thread-safe, bounded FIFO queue for direction tokens.
-
-    Why bounded?  If the user scrolls 1 000 times in one second the queue
-    would grow unbounded.  We cap it at MAX_PENDING so memory stays O(1).
-    Excess events are silently dropped – this is acceptable because the
-    physical inventory only has 10 slots; more than MAX_PENDING pending
-    moves can never be meaningful.
-    """
 
     MAX_PENDING: int = 9   # 10 slots − 1 (max useful pending moves)
 
@@ -138,10 +107,6 @@ class SlotQueue:
         self._q: queue.Queue[Direction] = queue.Queue(maxsize=self.MAX_PENDING)
 
     def put(self, direction: Direction) -> bool:
-        """
-        Enqueue a direction token.
-        Returns True on success, False if the queue is full (event dropped).
-        """
         try:
             self._q.put_nowait(direction)
             return True
@@ -149,10 +114,6 @@ class SlotQueue:
             return False
 
     def get(self, timeout: float = 0.1) -> Optional[Direction]:
-        """
-        Block until a token is available or timeout expires.
-        Returns None on timeout.
-        """
         try:
             return self._q.get(timeout=timeout)
         except queue.Empty:
@@ -171,17 +132,6 @@ class SlotQueue:
 
 
 class SlotController:
-    """
-    Owns the current slot state and processes queued direction tokens.
-
-    Processing loop (runs in its own daemon thread):
-      1. Block-wait on the queue.
-      2. Compute the next slot (or abort if at a boundary).
-      3. Simulate the corresponding keyboard key via pynput.
-      4. Log the transition.
-      5. Sleep for the configured delay before processing the next token.
-         (This is what makes rapid scrolling feel smooth and sequential.)
-    """
 
     def __init__(self, cfg: Config, slot_queue: SlotQueue,
                  logger: logging.Logger) -> None:
@@ -199,9 +149,9 @@ class SlotController:
             daemon=True,
         )
 
-    # ------------------------------------------------------------------
+    
     # Public API
-    # ------------------------------------------------------------------
+    
 
     @property
     def current_slot(self) -> str:
@@ -215,18 +165,12 @@ class SlotController:
         self._stop_event.set()
         self._thread.join(timeout=2.0)
 
-    # ------------------------------------------------------------------
+    
     # Internal helpers
-    # ------------------------------------------------------------------
+    
 
     def _next_slot(self, direction: Direction) -> Optional[str]:
-        """
-        Return the slot that follows the current one in the given direction,
-        or None if we are already at a boundary.
 
-        Slot ordering:  1  2  3  4  5  6  7  8  9  0
-        Index:          0  1  2  3  4  5  6  7  8  9
-        """
         with self._lock:
             idx = SLOT_INDEX[self._current_slot]
 
@@ -241,7 +185,6 @@ class SlotController:
         return SLOT_ORDER[new_idx]
 
     def _apply_slot(self, new_slot: str) -> None:
-        """Update state and emit the keyboard key for new_slot."""
         with self._lock:
             self._current_slot = new_slot
 
@@ -266,15 +209,11 @@ class SlotController:
                 old_slot, dir_label, new_slot, new_slot,
             )
 
-    # ------------------------------------------------------------------
+    
     # Processing loop (daemon thread)
-    # ------------------------------------------------------------------
+    
 
     def _process_loop(self) -> None:
-        """
-        Event-driven loop – blocks on the queue with a short timeout so
-        the stop_event can be polled without busy-waiting.
-        """
         delay = self._cfg.effective_delay_seconds()
 
         while not self._stop_event.is_set():
@@ -305,25 +244,6 @@ class SlotController:
 
 
 class InputHandler:
-    """
-    Listens for mouse wheel and keyboard events using pynput and feeds
-    Direction tokens into the SlotQueue.
-
-    Why pynput?
-      - Cross-platform (Windows, macOS, Linux).
-      - Uses OS-level hooks → truly event-driven, zero polling.
-      - Minimal CPU overhead between events.
-
-    Mouse wheel:
-      on_scroll() is called by pynput with dy > 0  (scroll up / wheel forward)
-      or dy < 0 (scroll down / wheel backward).
-      We treat dy != 0 per event; each physical notch fires one callback.
-
-    Keyboard:
-      Q  →  Direction.LEFT
-      E  →  Direction.RIGHT
-      Ctrl+C / Esc  →  graceful shutdown
-    """
 
     def __init__(self, slot_queue: SlotQueue, logger: logging.Logger,
                  stop_callback) -> None:
@@ -334,17 +254,11 @@ class InputHandler:
         self._mouse_listener: Optional[mouse.Listener] = None
         self._kb_listener: Optional[keyboard.Listener] = None
 
-    # ------------------------------------------------------------------
+    
     # Mouse callbacks
-    # ------------------------------------------------------------------
+    
 
     def _on_scroll(self, x: int, y: int, dx: float, dy: float) -> None:
-        """
-        pynput fires this once per wheel notch.
-        dy > 0  →  wheel up   →  RIGHT (next slot)
-        dy < 0  →  wheel down →  LEFT  (previous slot)
-        dx      →  horizontal scroll – ignored
-        """
         if dy == 0:
             return
 
@@ -356,12 +270,11 @@ class InputHandler:
             self._logger.debug("Mouse scroll dy=%+.1f → %s [%s]",
                                dy, direction.name, status)
 
-    # ------------------------------------------------------------------
+    
     # Keyboard callbacks
-    # ------------------------------------------------------------------
+    
 
     def _on_key_press(self, key) -> None:
-        """Handle Q, E, and Esc/Ctrl+C for shutdown."""
         try:
             char = key.char
         except AttributeError:
@@ -383,12 +296,11 @@ class InputHandler:
             self._logger.info("Esc pressed – shutting down.")
             self._stop_callback()
 
-    # ------------------------------------------------------------------
+    
     # Lifecycle
-    # ------------------------------------------------------------------
+    
 
     def start(self) -> None:
-        """Start both listeners.  Raises RuntimeError on hook failure."""
         try:
             self._mouse_listener = mouse.Listener(on_scroll=self._on_scroll)
             self._mouse_listener.start()
@@ -415,13 +327,13 @@ class InputHandler:
 
 
 def main() -> None:
-    # -----------------------------------------------------------------------
+    
     # Config – edit here or load from a file/CLI in a real application
-    # -----------------------------------------------------------------------
+    
     cfg = Config(
         sensitivity=Sensitivity.NORMAL,
         transition_delay_ms=0,      # 0 → use sensitivity preset
-        enable_logging=True,
+        enable_logging=False,
         debug_mode=False,
     )
 
@@ -439,9 +351,9 @@ def main() -> None:
     logger.info("Starting at slot : 1")
     logger.info("-" * 60)
 
-    # -----------------------------------------------------------------------
+    
     # Wire up components
-    # -----------------------------------------------------------------------
+    
     slot_queue  = SlotQueue()
     stop_event  = threading.Event()
     controller  = SlotController(cfg, slot_queue, logger)
@@ -451,9 +363,9 @@ def main() -> None:
 
     input_handler = InputHandler(slot_queue, logger, stop_callback=request_stop)
 
-    # -----------------------------------------------------------------------
+    
     # Start
-    # -----------------------------------------------------------------------
+    
     try:
         controller.start()
         input_handler.start()
@@ -464,9 +376,9 @@ def main() -> None:
                      "or grant Accessibility access on macOS).")
         sys.exit(1)
 
-    # -----------------------------------------------------------------------
+    
     # Main thread: wait for stop signal (Esc or Ctrl+C)
-    # -----------------------------------------------------------------------
+    
     try:
         while not stop_event.is_set():
             time.sleep(0.25)

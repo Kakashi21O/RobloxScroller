@@ -1,8 +1,1 @@
-# Inventory Slot Controller – Python dependencies
-# Compatible with Python 3.8+  (tested on 3.13)
-#
-# pynput: cross-platform mouse & keyboard hook library
-#   - mouse wheel events (on_scroll)
-#   - keyboard key press events (on_press)
-#   - keyboard key simulation (Controller)
 pynput>=1.7.6
